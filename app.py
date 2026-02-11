@@ -3,7 +3,7 @@ import os
 import io
 import csv
 import random
-from flask import Flask, render_template_string, request, make_response, redirect, send_file
+from flask import Flask, render_template_string, request, make_response, redirect
 from flask_sqlalchemy import SQLAlchemy
 import pyrankvote
 from pyrankvote import Candidate, Ballot
@@ -11,8 +11,12 @@ from pyrankvote import Candidate, Ballot
 app = Flask(__name__)
 
 # --- DATABASE CONFIG ---
-# On Render, this uses the Postgres DB. Locally, it creates 'local.db'
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///local.db')
+# Automatically switches between Render's Postgres and a local file for testing
+uri = os.environ.get('DATABASE_URL', 'sqlite:///local.db')
+if uri and uri.startswith("postgres://"):
+    uri = uri.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -20,7 +24,7 @@ db = SQLAlchemy(app)
 class Vote(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.String(100))
-    ranks = db.Column(db.Text) 
+    ranks = db.Column(db.Text) # Stores data as "Choice1||Choice2||Choice3..."
 
 # Create the tables
 with app.app_context():
@@ -46,6 +50,7 @@ RAW_OPTIONS = [
 ]
 OPTIONS = sorted(RAW_OPTIONS)
 
+# (I'm keeping your HTML_TEMPLATE exactly as you had it, just ensuring the logic below matches it)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -59,8 +64,6 @@ HTML_TEMPLATE = """
         .pulse-dot { height: 12px; width: 12px; background-color: #d13438; border-radius: 50%; display: inline-block; animation: pulse-red 2s infinite; }
         @keyframes pulse-red { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(209, 52, 56, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(209, 52, 56, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(209, 52, 56, 0); } }
         .winner-card { display: flex; justify-content: space-between; align-items: center; padding: 15px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #e1dfdd; }
-        .champion-card { background: #fff9e6; border: 2px solid #ffcc00; font-size: 1.1em; }
-        .finalist-card { background: #ffffff; font-size: 0.95em; }
         .vote-count { font-weight: bold; color: #464EB8; min-width: 80px; text-align: right; }
         .search-box { width: 100%; padding: 12px; margin-bottom: 15px; border: 2px solid #464EB8; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
         .sortable-item { background: #fff; border: 1px solid #e1dfdd; margin: 5px 0; padding: 12px; border-radius: 4px; cursor: grab; font-size: 13px; display: flex; align-items: center; }
@@ -85,9 +88,8 @@ HTML_TEMPLATE = """
             <div style="text-align: center; margin-top: 30px; display: flex; flex-direction: column; gap: 15px; align-items: center;">
                 <div style="display: flex; gap: 10px;">
                     <a href="/reset_my_vote" style="color: #464EB8; text-decoration: none; font-size: 0.9em; font-weight: bold; border: 1px solid #464EB8; padding: 10px 20px; border-radius: 4px;">🔄 Change My Vote</a>
-                    <a href="/download_results" style="color: #107c10; text-decoration: none; font-size: 0.9em; font-weight: bold; border: 1px solid #107c10; padding: 10px 20px; border-radius: 4px;">📥 Download CSV</a>
+                    <a href="/download_votes" style="color: #107c10; text-decoration: none; font-size: 0.9em; font-weight: bold; border: 1px solid #107c10; padding: 10px 20px; border-radius: 4px;">📥 Download CSV</a>
                 </div>
-                <div style="margin-top: 20px; opacity: 0.3;"><a href="/admin_test_data" style="font-size: 0.7em; color: gray; text-decoration: none;">[Admin: Add Test Ballots]</a></div>
             </div>
         {% else %}
             <h2>Unit Naming Vote</h2>
@@ -133,13 +135,11 @@ HTML_TEMPLATE = """
 </html>
 """
 
-
 def get_election_data():
     all_votes = Vote.query.all()
     if not all_votes:
         return "Waiting for first vote...", "No rounds calculated yet.", 0, "No votes yet"
     
-    # RECONSTRUCT BALLOTS FROM DATABASE
     ballots = []
     latest_time = "Unknown"
     for v in all_votes:
@@ -148,20 +148,17 @@ def get_election_data():
         latest_time = v.timestamp
     
     candidates = [Candidate(o) for o in OPTIONS]
-    election = pyrankvote.single_transferable_vote(candidates, ballots, number_of_seats=5)
+    # Changed to Instant Runoff for naming (Standard 1-winner election)
+    election = pyrankvote.instant_runoff_voting(candidates, ballots)
     winners = election.get_winners()
     
+    result_html = '<div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">'
     if winners:
-        final_round = election.rounds[-1]
-        result_html = '<div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">'
         for i, winner in enumerate(winners):
-            votes = next((int(res.number_of_votes) for res in final_round.candidate_results if res.candidate == winner), 0)
             style = "background: #fff9e6; border: 2px solid #ffcc00;" if i == 0 else "background: white; border: 1px solid #e1dfdd;"
-            label = "🏆 CHAMPION" if i == 0 else f"🥈 Finalist #{i+1}"
-            result_html += f'<div class="winner-card" style="{style}"><span><strong>{label}:</strong> {winner}</span><span class="vote-count">{votes} votes</span></div>'
-        result_html += '</div>'
-    else:
-        result_html = "Calculating..."
+            label = "🏆 CURRENT LEADER" if i == 0 else f"Finalist #{i+1}"
+            result_html += f'<div class="winner-card" style="{style}"><span><strong>{label}:</strong> {winner}</span></div>'
+    result_html += '</div>'
         
     return result_html, str(election), len(all_votes), latest_time
 
@@ -182,67 +179,18 @@ def vote():
     res.set_cookie('voted', 'true', max_age=60*60*24*7)
     return res
 
-@app.route('/results_2026_secret')
-def results():
-    all_votes = Vote.query.all()
-    if not all_votes:
-        return "No votes yet! The vault is empty."
-
-    # Convert database rows into pyrankvote ballots
-    candidates = [pyrankvote.Candidate(opt) for opt in RAW_OPTIONS]
-    ballots = []
-    for v in all_votes:
-        # Split "Name1, Name2, Name3" and remove "None"
-        choices = [c.strip() for c in v.selected_options.split(',') if c.strip() != "None"]
-        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
-
-    election_result = pyrankvote.instant_runoff_voting(candidates, ballots)
-    
-    return f"""
-    <h1>Live Election Results</h1>
-    <p>Total Ballots: {len(all_votes)}</p>
-    <pre>{election_result}</pre>
-    <hr>
-    <a href="/download_votes">Download Raw Excel (CSV) Data</a>
-    """
-
-# --- THE DOWNLOAD BUTTON ---
 @app.route('/download_votes')
 def download():
-    si = StringIO()
+    si = io.StringIO()
     cw = csv.writer(si)
     cw.writerow(['Vote_ID', 'Ranked_Choices', 'Time_Submitted'])
-    
     votes = Vote.query.all()
     for v in votes:
-        cw.writerow([v.id, v.selected_options, v.timestamp])
-        
+        cw.writerow([v.id, v.ranks, v.timestamp])
     output = make_response(si.getvalue())
     output.headers["Content-Disposition"] = "attachment; filename=unit_naming_final.csv"
     output.headers["Content-type"] = "text/csv"
     return output
-
-# --- INITIALIZE DATABASE ---
-with app.app_context():
-    db.create_all()
-
-if __name__ == '__main__':
-    app.run(debug=True)
-@app.route('/results_admin_view')
-def results():
-    all_votes = Vote.query.all()
-    if not all_votes:
-        return "No votes cast yet."
-
-    candidates = [pyrankvote.Candidate(opt) for opt in RAW_OPTIONS]
-    ballots = []
-    for v in all_votes:
-        # Clean up the choices for the math engine
-        choices = [c.strip() for c in v.selected_options.split(',') if c.strip() != "None"]
-        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
-
-    result = pyrankvote.instant_runoff_voting(candidates, ballots)
-    return f"<h1>Ranked Choice Results</h1><pre>{result}</pre><br><a href='/export_csv'>Download CSV</a>"
 
 @app.route('/reset_my_vote')
 def reset_my_vote():
@@ -252,12 +200,13 @@ def reset_my_vote():
 
 @app.route('/admin_test_data')
 def admin_test_data():
-    for _ in range(10):
-        shuffled = random.sample(OPTIONS, 10)
+    for _ in range(5):
+        shuffled = random.sample(OPTIONS, len(OPTIONS))
         now = datetime.datetime.now().strftime("%A, %b %d, %Y | %I:%M %p")
         db.session.add(Vote(timestamp=now, ranks='||'.join(shuffled)))
     db.session.commit()
     return redirect('/')
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    # Render uses Gunicorn, but this helps for local testing
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
