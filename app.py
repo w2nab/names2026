@@ -11,7 +11,6 @@ from pyrankvote import Candidate, Ballot
 app = Flask(__name__)
 
 # --- DATABASE CONFIG ---
-# Automatically switches between Render's Postgres and a local file for testing
 uri = os.environ.get('DATABASE_URL', 'sqlite:///local.db')
 if uri and uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
@@ -20,13 +19,11 @@ app.config['SQLALCHEMY_DATABASE_URI'] = uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# Define the Database Table
 class Vote(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     timestamp = db.Column(db.String(100))
-    ranks = db.Column(db.Text) # Stores data as "Choice1||Choice2||Choice3..."
+    ranks = db.Column(db.Text) # This MUST be named 'ranks' to match the functions below
 
-# Create the tables
 with app.app_context():
     db.create_all()
 
@@ -183,20 +180,14 @@ def vote():
 def download():
     si = io.StringIO()
     cw = csv.writer(si)
-    # The header row
-    cw.writerow(['Vote_ID', 'Ranked_Choices', 'Time_Submitted'])
-    
-    # Get all votes from the database
-    votes = Vote.query.all()
-    for v in votes:
-        # v.ranks is the correct column name from your 'Vote' class
+    cw.writerow(['ID', 'Rankings', 'Time'])
+    for v in Vote.query.all():
         cw.writerow([v.id, v.ranks, v.timestamp])
-        
-    output = make_response(si.getvalue())
-    output.headers["Content-Disposition"] = "attachment; filename=unit_naming_final.csv"
-    output.headers["Content-type"] = "text/csv"
-    return output
-
+    res = make_response(si.getvalue())
+    res.headers["Content-Disposition"] = "attachment; filename=results.csv"
+    res.headers["Content-type"] = "text/csv"
+    return res
+    
 @app.route('/reset_my_vote')
 def reset_my_vote():
     res = make_response(redirect('/'))
