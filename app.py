@@ -183,10 +183,15 @@ def vote():
 def download():
     si = io.StringIO()
     cw = csv.writer(si)
+    # The header row
     cw.writerow(['Vote_ID', 'Ranked_Choices', 'Time_Submitted'])
+    
+    # Get all votes from the database
     votes = Vote.query.all()
     for v in votes:
+        # v.ranks is the correct column name from your 'Vote' class
         cw.writerow([v.id, v.ranks, v.timestamp])
+        
     output = make_response(si.getvalue())
     output.headers["Content-Disposition"] = "attachment; filename=unit_naming_final.csv"
     output.headers["Content-type"] = "text/csv"
