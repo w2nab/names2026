@@ -182,19 +182,52 @@ def vote():
     res.set_cookie('voted', 'true', max_age=60*60*24*7)
     return res
 
-@app.route('/download_results')
-def download_results():
+@app.route('/results_2026_secret')
+def results():
     all_votes = Vote.query.all()
-    proxy = io.StringIO()
-    writer = csv.writer(proxy)
-    writer.writerow(['Timestamp', 'Rankings'])
-    for v in all_votes:
-        writer.writerow([v.timestamp, v.ranks])
-    mem = io.BytesIO()
-    mem.write(proxy.getvalue().encode('utf-8'))
-    mem.seek(0)
-    return send_file(mem, as_attachment=True, download_name="unit_naming_results.csv", mimetype="text/csv")
+    if not all_votes:
+        return "No votes yet! The vault is empty."
 
+    # Convert database rows into pyrankvote ballots
+    candidates = [pyrankvote.Candidate(opt) for opt in RAW_OPTIONS]
+    ballots = []
+    for v in all_votes:
+        # Split "Name1, Name2, Name3" and remove "None"
+        choices = [c.strip() for c in v.selected_options.split(',') if c.strip() != "None"]
+        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
+
+    election_result = pyrankvote.instant_runoff_voting(candidates, ballots)
+    
+    return f"""
+    <h1>Live Election Results</h1>
+    <p>Total Ballots: {len(all_votes)}</p>
+    <pre>{election_result}</pre>
+    <hr>
+    <a href="/download_votes">Download Raw Excel (CSV) Data</a>
+    """
+
+# --- THE DOWNLOAD BUTTON ---
+@app.route('/download_votes')
+def download():
+    si = StringIO()
+    cw = csv.writer(si)
+    cw.writerow(['Vote_ID', 'Ranked_Choices', 'Time_Submitted'])
+    
+    votes = Vote.query.all()
+    for v in votes:
+        cw.writerow([v.id, v.selected_options, v.timestamp])
+        
+    output = make_response(si.getvalue())
+    output.headers["Content-Disposition"] = "attachment; filename=unit_naming_final.csv"
+    output.headers["Content-type"] = "text/csv"
+    return output
+
+# --- INITIALIZE DATABASE ---
+with app.app_context():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True)
 @app.route('/results_admin_view')
 def results():
     all_votes = Vote.query.all()
