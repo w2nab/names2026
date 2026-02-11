@@ -133,6 +133,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
+
 def get_election_data():
     all_votes = Vote.query.all()
     if not all_votes:
@@ -193,6 +194,22 @@ def download_results():
     mem.write(proxy.getvalue().encode('utf-8'))
     mem.seek(0)
     return send_file(mem, as_attachment=True, download_name="unit_naming_results.csv", mimetype="text/csv")
+
+@app.route('/results_admin_view')
+def results():
+    all_votes = Vote.query.all()
+    if not all_votes:
+        return "No votes cast yet."
+
+    candidates = [pyrankvote.Candidate(opt) for opt in RAW_OPTIONS]
+    ballots = []
+    for v in all_votes:
+        # Clean up the choices for the math engine
+        choices = [c.strip() for c in v.selected_options.split(',') if c.strip() != "None"]
+        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
+
+    result = pyrankvote.instant_runoff_voting(candidates, ballots)
+    return f"<h1>Ranked Choice Results</h1><pre>{result}</pre><br><a href='/export_csv'>Download CSV</a>"
 
 @app.route('/reset_my_vote')
 def reset_my_vote():
