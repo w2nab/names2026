@@ -187,12 +187,39 @@ def download():
     res.headers["Content-Disposition"] = "attachment; filename=results.csv"
     res.headers["Content-type"] = "text/csv"
     return res
-    
+
 @app.route('/reset_my_vote')
 def reset_my_vote():
     res = make_response(redirect('/'))
     res.set_cookie('voted', '', expires=0)
     return res
+
+@app.route('/results_admin_view')
+def results_admin():
+    all_votes = Vote.query.all()
+    if not all_votes:
+        return "No votes cast yet. The vault is empty."
+
+    # Use the OPTIONS list you defined at the top
+    candidates = [pyrankvote.Candidate(opt) for opt in OPTIONS]
+    ballots = []
+    
+    for v in all_votes:
+        # IMPORTANT: Use v.ranks (the correct column name) 
+        # and split by '||' (the correct separator)
+        choices = [c.strip() for c in v.ranks.split('||')]
+        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
+
+    # Perform the Ranked Choice math
+    result = pyrankvote.instant_runoff_voting(candidates, ballots)
+    
+    return f"""
+    <h1>Ranked Choice Results (Admin View)</h1>
+    <p>Total Ballots: {len(all_votes)}</p>
+    <pre>{result}</pre>
+    <br>
+    <a href='/download_votes'>Download CSV for Excel</a> | <a href='/'>Back to Voting</a>
+    """
 
 @app.route('/admin_test_data')
 def admin_test_data():
