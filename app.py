@@ -162,14 +162,21 @@ def get_election_data():
 @app.route('/')
 def index():
     voted = request.cookies.get('voted')
-    all_votes = Vote.query.all()
-    # Simple logic: if voted, show a thank you and the admin link
-    if voted:
-        return f"<h1>Thank you for voting!</h1><p>Total votes so far: {len(all_votes)}</p><br><a href='/results_admin_view'>View Live Standings</a>"
     
-    # Otherwise, show the voting list (simplified for this example)
-    opts_html = "".join([f"<li>{o}</li>" for o in OPTIONS])
-    return f"<h2>Unit Naming 2026</h2><ul>{opts_html}</ul><p>Drag-and-drop UI loading...</p><a href='/admin_test_data'>[Add Test Votes]</a>"
+    # We need to run the math even for the index page 
+    # so we can show the current "Grand Standings" to people who already voted.
+    winner, details, total, ts = get_election_data()
+    
+    # Use the TEMPLATE you built, not the simplified string!
+    return render_template_string(
+        HTML_TEMPLATE, 
+        already_voted=voted, 
+        options=OPTIONS, 
+        winner=winner, 
+        detailed_results=details, 
+        total_votes=total, 
+        timestamp=ts
+    )
 
 @app.route('/vote', methods=['POST'])
 def vote():
@@ -202,53 +209,62 @@ def reset_my_vote():
 @app.route('/results_admin_view')
 def results_admin_view():
     all_votes = Vote.query.all()
-    if not all_votes: return "No votes yet."
+    if not all_votes: 
+        return "<h1>The Vault is Empty</h1><p>No votes yet.</p><br><a href='/'>Back to Voting</a>"
     
     candidates = [Candidate(o) for o in OPTIONS]
-    ballots = [Ballot(ranked_candidates=[Candidate(c) for c in v.ranks.split('||')]) for v in all_votes]
+    ballots = [Ballot(ranked_candidates=[Candidate(c.strip()) for c in v.ranks.split('||')]) for v in all_votes]
     election = pyrankvote.instant_runoff_voting(candidates, ballots)
     
-    return f"<h1>Admin Results</h1><pre>{election}</pre><br><a href='/download_votes'>Download CSV</a>"
-    # Use the OPTIONS list you defined at the top
-    candidates = [pyrankvote.Candidate(opt) for opt in OPTIONS]
-    ballots = []
-    
-    for v in all_votes:
-        # IMPORTANT: Use v.ranks (the correct column name) 
-        # and split by '||' (the correct separator)
-        choices = [c.strip() for c in v.ranks.split('||')]
-        ballots.append(pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in choices]))
-
-    # Perform the Ranked Choice math
-    result = pyrankvote.instant_runoff_voting(candidates, ballots)
-    
     return f"""
-    <h1>Ranked Choice Results (Admin View)</h1>
-    <p>Total Ballots: {len(all_votes)}</p>
-    <pre>{result}</pre>
-    <br>
-    <a href='/download_votes'>Download CSV for Excel</a> | <a href='/'>Back to Voting</a>
+    <body style="font-family: sans-serif; padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1>Ranked Choice Results (Admin)</h1>
+            <a href='/download_votes' style="background: #107c10; color: white; padding: 10px; text-decoration: none; border-radius: 4px;">📥 Download CSV</a>
+        </div>
+        
+        <p>Total Ballots: <b>{len(all_votes)}</b></p>
+        <pre style="background: #323130; color: #00ff00; padding: 15px; border-radius: 5px; overflow-x: auto;">{election}</pre>
+        
+        <hr style="margin: 30px 0;">
+        <div style="display: flex; gap: 20px; align-items: center;">
+            <a href='/'>🏠 Back to Voting</a>
+            <a href='/admin_test_data' style="color: #464EB8;">🧪 Add 3 Test Votes</a>
+            <a href='/wipe_the_vault_2026_CONFIRM' 
+               onclick="return confirm('WARNING: This will permanently delete EVERY vote. Are you sure?')" 
+               style="color: #d13438; font-size: 0.8em; border: 1px solid #d13438; padding: 5px; border-radius: 4px; text-decoration: none;">
+               ⚠️ Wipe Database (Monday Morning Only)
+            </a>
+        </div>
+    </body>
     """
 
 @app.route('/results_2026_secret')
-def secret_results():
-    all_votes = Vote.query.all()
-    if not all_votes:
-        return "The vault is currently empty."
-    
-    # This uses the pyrankvote logic to show the standings
-    candidates = [pyrankvote.Candidate(o) for o in OPTIONS]
-    ballots = [pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in v.ranks.split('||')]) for v in all_votes]
-    election = pyrankvote.instant_runoff_voting(candidates, ballots)
-    
-    return f"<h1>Secret Results</h1><pre>{election}</pre>"
+def secret_results_view():
+    # This just points to the admin view so you don't have to maintain two pages
+    return results_admin_view()
 
 @app.route('/admin_test_data')
 def admin_test_data():
+    # Adds 3 random ballots for testing
     for _ in range(3):
-        db.session.add(Vote(timestamp=str(datetime.datetime.now()), ranks='||'.join(random.sample(OPTIONS, 5))))
+        # We sample the full OPTIONS list to simulate a real ballot
+        random_ranks = random.sample(OPTIONS, len(OPTIONS))
+        db.session.add(Vote(timestamp=str(datetime.datetime.now()), ranks='||'.join(random_ranks)))
     db.session.commit()
+    # This takes you straight to the results so you can see the math in action
     return redirect('/results_admin_view')
+
+@app.route('/wipe_the_vault_2026_CONFIRM')
+def wipe_database():
+    try:
+        # This deletes all rows in the Vote table
+        db.session.query(Vote).delete()
+        db.session.commit()
+        return "<h1>Vault Wiped Clean</h1><p>The database is now at 0 votes. <a href='/'>Back to Home</a></p>"
+    except Exception as e:
+        db.session.rollback()
+        return f"Error wiping database: {str(e)}"
 
 if __name__ == '__main__':
     app.run()
