@@ -194,11 +194,14 @@ def reset_my_vote():
     res.set_cookie('voted', '', expires=0)
     return res
 
-@app.route('/results_admin_view')
-def results_admin():
+@app.route('/results_admin_view')  # <--- This must match the URL exactly
+def results_admin_view():         # <--- Function name can be anything
     all_votes = Vote.query.all()
     if not all_votes:
-        return "No votes cast yet. The vault is empty."
+        return "No votes yet."
+    
+    # ... (rest of the results logic)
+    return "Results will show here"
 
     # Use the OPTIONS list you defined at the top
     candidates = [pyrankvote.Candidate(opt) for opt in OPTIONS]
