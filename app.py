@@ -238,12 +238,6 @@ def results_admin_view():
         </div>
     </body>
     """
-
-@app.route('/results_2026_secret')
-def secret_results_view():
-    # This just points to the admin view so you don't have to maintain two pages
-    return results_admin_view()
-
 @app.route('/admin_test_data')
 def admin_test_data():
     # Adds 3 random ballots for testing
@@ -266,5 +260,19 @@ def wipe_database():
         db.session.rollback()
         return f"Error wiping database: {str(e)}"
 
+@app.route('/results_2026_secret')
+def secret_results_view():
+    all_votes = Vote.query.all()
+    if not all_votes:
+        return "Vault is empty."
+    
+    # We use your 'ranks' column and '||' separator
+    candidates = [Candidate(o) for o in OPTIONS]
+    ballots = [Ballot(ranked_candidates=[Candidate(c.strip()) for c in v.ranks.split('||')]) for v in all_votes]
+    election = pyrankvote.instant_runoff_voting(candidates, ballots)
+    
+    return f"<h1>Secret View</h1><pre>{election}</pre>"
+
+# THIS MUST BE THE VERY LAST LINE OF THE FILE
 if __name__ == '__main__':
     app.run()
