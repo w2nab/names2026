@@ -240,16 +240,36 @@ def results_admin_view():
     """
 @app.route('/results_2026_secret')
 def secret_results_view():
-    all_votes = Vote.query.all()
+    all_votes = Vote.query.order_by(Vote.id.asc()).all()
     if not all_votes:
-        return "Vault is empty."
-    
-    # We use your 'ranks' column and '||' separator
+        return "<h1>Vault is empty.</h1>"
+
+    opt_set = set(OPTIONS)
     candidates = [Candidate(o) for o in OPTIONS]
-    ballots = [Ballot(ranked_candidates=[Candidate(c.strip()) for c in v.ranks.split('||')]) for v in all_votes]
+
+    ballots = []
+    for v in all_votes:
+        raw = (v.ranks or "")
+        rank_list = [c.strip() for c in raw.split("||") if c.strip()]
+        # Ignore any candidates that no longer exist in OPTIONS
+        rank_list = [c for c in rank_list if c in opt_set]
+        if rank_list:
+            ballots.append(Ballot(ranked_candidates=[Candidate(c) for c in rank_list]))
+
+    if not ballots:
+        return "<h1>No valid ballots.</h1><p>Votes exist, but none match current OPTIONS.</p>"
+
     election = pyrankvote.instant_runoff_voting(candidates, ballots)
-    
-    return f"<h1>Secret View</h1><pre>{election}</pre>"
+
+    return f"""
+    <body style="font-family: system-ui, sans-serif; padding: 20px;">
+      <h1>Secret Results View</h1>
+      <p>Total Rows in Vote table: <b>{len(all_votes)}</b></p>
+      <pre style="background:#111;color:#0f0;padding:14px;border-radius:8px;overflow:auto;">{election}</pre>
+      <p style="margin-top:14px;"><a href="/">Back to Voting</a></p>
+    </body>
+    """
+
 
 @app.route('/admin_test_data')
 def admin_test_data():
@@ -262,16 +282,43 @@ def admin_test_data():
     # This takes you straight to the results so you can see the math in action
     return redirect('/results_admin_view')
 
+@app.route("/_dbcheck")
+def _dbcheck():
+    # Shows which DB you're actually connected to + row count
+    try:
+        count = Vote.query.count()
+    except Exception as e:
+        return f"<pre>DB ERROR: {e}</pre>", 500
+
+    return f"""
+    <pre>
+DATABASE_URL env set: {bool(os.environ.get("DATABASE_URL"))}
+SQLALCHEMY_DATABASE_URI: {app.config['SQLALCHEMY_DATABASE_URI']}
+Vote rows: {count}
+    </pre>
+    """
+
 @app.route('/wipe_the_vault_2026_CONFIRM')
 def wipe_database():
     try:
-        # This deletes all rows in the Vote table
-        db.session.query(Vote).delete()
+        before = Vote.query.count()
+        deleted = db.session.query(Vote).delete(synchronize_session=False)
         db.session.commit()
-        return "<h1>Vault Wiped Clean</h1><p>The database is now at 0 votes. <a href='/'>Back to Home</a></p>"
+        after = Vote.query.count()
+
+        return f"""
+        <pre>
+URI: {app.config['SQLALCHEMY_DATABASE_URI']}
+Before: {before}
+Deleted: {deleted}
+After: {after}
+        </pre>
+        <a href="/">Back</a>
+        """
     except Exception as e:
         db.session.rollback()
-        return f"Error wiping database: {str(e)}"
+        return f"<pre>Wipe failed: {e}</pre>", 500
+
 
 # THIS MUST BE THE VERY LAST LINE OF THE FILE
 if __name__ == '__main__':
