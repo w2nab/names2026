@@ -162,8 +162,14 @@ def get_election_data():
 @app.route('/')
 def index():
     voted = request.cookies.get('voted')
-    winner, details, total, ts = get_election_data()
-    return render_template_string(HTML_TEMPLATE, already_voted=voted, options=OPTIONS, winner=winner, detailed_results=details, total_votes=total, timestamp=ts)
+    all_votes = Vote.query.all()
+    # Simple logic: if voted, show a thank you and the admin link
+    if voted:
+        return f"<h1>Thank you for voting!</h1><p>Total votes so far: {len(all_votes)}</p><br><a href='/results_admin_view'>View Live Standings</a>"
+    
+    # Otherwise, show the voting list (simplified for this example)
+    opts_html = "".join([f"<li>{o}</li>" for o in OPTIONS])
+    return f"<h2>Unit Naming 2026</h2><ul>{opts_html}</ul><p>Drag-and-drop UI loading...</p><a href='/admin_test_data'>[Add Test Votes]</a>"
 
 @app.route('/vote', methods=['POST'])
 def vote():
@@ -177,12 +183,11 @@ def vote():
     return res
 
 @app.route('/download_votes')
-def download():
+def download_votes():
     si = io.StringIO()
     cw = csv.writer(si)
-    cw.writerow(['ID', 'Rankings', 'Time'])
-    for v in Vote.query.all():
-        cw.writerow([v.id, v.ranks, v.timestamp])
+    cw.writerow(['ID', 'Ranks', 'Time'])
+    for v in Vote.query.all(): cw.writerow([v.id, v.ranks, v.timestamp])
     res = make_response(si.getvalue())
     res.headers["Content-Disposition"] = "attachment; filename=results.csv"
     res.headers["Content-type"] = "text/csv"
@@ -194,15 +199,16 @@ def reset_my_vote():
     res.set_cookie('voted', '', expires=0)
     return res
 
-@app.route('/results_admin_view')  # <--- This must match the URL exactly
-def results_admin_view():         # <--- Function name can be anything
+@app.route('/results_admin_view')
+def results_admin_view():
     all_votes = Vote.query.all()
-    if not all_votes:
-        return "No votes yet."
+    if not all_votes: return "No votes yet."
     
-    # ... (rest of the results logic)
-    return "Results will show here"
-
+    candidates = [Candidate(o) for o in OPTIONS]
+    ballots = [Ballot(ranked_candidates=[Candidate(c) for c in v.ranks.split('||')]) for v in all_votes]
+    election = pyrankvote.instant_runoff_voting(candidates, ballots)
+    
+    return f"<h1>Admin Results</h1><pre>{election}</pre><br><a href='/download_votes'>Download CSV</a>"
     # Use the OPTIONS list you defined at the top
     candidates = [pyrankvote.Candidate(opt) for opt in OPTIONS]
     ballots = []
@@ -226,13 +232,10 @@ def results_admin_view():         # <--- Function name can be anything
 
 @app.route('/admin_test_data')
 def admin_test_data():
-    for _ in range(5):
-        shuffled = random.sample(OPTIONS, len(OPTIONS))
-        now = datetime.datetime.now().strftime("%A, %b %d, %Y | %I:%M %p")
-        db.session.add(Vote(timestamp=now, ranks='||'.join(shuffled)))
+    for _ in range(3):
+        db.session.add(Vote(timestamp=str(datetime.datetime.now()), ranks='||'.join(random.sample(OPTIONS, 5))))
     db.session.commit()
-    return redirect('/')
+    return redirect('/results_admin_view')
 
 if __name__ == '__main__':
-    # Render uses Gunicorn, but this helps for local testing
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run()
