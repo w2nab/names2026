@@ -319,6 +319,14 @@ After: {after}
         db.session.rollback()
         return f"<pre>Wipe failed: {e}</pre>", 500
 
+@app.route("/_routes")
+def _routes():
+    lines = []
+    for r in sorted(app.url_map.iter_rules(), key=lambda x: x.rule):
+        methods = ",".join(sorted(m for m in r.methods if m in {"GET","POST"}))
+        lines.append(f"{r.rule:35s}  [{methods}]  -> {r.endpoint}")
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
 
 # THIS MUST BE THE VERY LAST LINE OF THE FILE
 if __name__ == '__main__':
