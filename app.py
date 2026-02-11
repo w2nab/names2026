@@ -230,6 +230,19 @@ def results_admin_view():
     <a href='/download_votes'>Download CSV for Excel</a> | <a href='/'>Back to Voting</a>
     """
 
+@app.route('/results_2026_secret')
+def secret_results():
+    all_votes = Vote.query.all()
+    if not all_votes:
+        return "The vault is currently empty."
+    
+    # This uses the pyrankvote logic to show the standings
+    candidates = [pyrankvote.Candidate(o) for o in OPTIONS]
+    ballots = [pyrankvote.Ballot(ranked_candidates=[pyrankvote.Candidate(c) for c in v.ranks.split('||')]) for v in all_votes]
+    election = pyrankvote.instant_runoff_voting(candidates, ballots)
+    
+    return f"<h1>Secret Results</h1><pre>{election}</pre>"
+
 @app.route('/admin_test_data')
 def admin_test_data():
     for _ in range(3):
