@@ -39,15 +39,14 @@ RAW_OPTIONS = [
     "KRAKEN - Kinetic Repair", "SHARK - Shore Habitability", 
     "CEU-REACT - Civil Engineering", "HAMR - Habitability and Maintenance",
     "NEPTUNE - Naval Engineering", "BADGER - Base Asset Damage",
-    "ANCHOR Team - Ashore Nationwide", "SIRC - Shoreside Infrastructure",
+    "SIRC - Shoreside Infrastructure",
     "ANCHOR - Advanced Network", "BOLT - Base Operations",
     "DEU - Deployable Engineering", "PIER - Program for Integrated Engineering",
     "SEAWALL - Sustained Engineering", "SHORE - Shoreline Heavy Operations",
     "SURGE - Shoreline Utility", "SWIFT - Shoreline Works",
-    "FRD - Facilities Response", "HMR (HAMMER) - Habitability Maintenance",
-    "RENC (WRENCH) - Rapid Engineering", "SAW - Structural Assessment",
-    "HLMT (HELMET) - Habitability Logistics", "PLIERS - Precision Logistics",
-    "CEA OTTERS - Coast Guard Enlisted", "ANCHOR - Advanced Naval Construction",
+    "FRD - Facilities Response", "RENC (WRENCH) - Rapid Engineering", 
+    "SAW - Structural Assessment","HLMT (HELMET) - Habitability Logistics", 
+    "PLIERS - Precision Logistics", "CEA OTTERS - Coast Guard Enlisted", 
     "BEACON - Base Engineering", "AEGIS - Advanced Engineering",
     "FORGE - Facility Operations", "RAMPART - Rapid Asset Maintenance"
 ]
@@ -140,31 +139,65 @@ HTML_TEMPLATE = """
 """
 
 def get_election_data():
-    all_votes = Vote.query.all()
+    all_votes = Vote.query.order_by(Vote.id.asc()).all()
     if not all_votes:
         return "Waiting for first vote...", "No rounds calculated yet.", 0, "No votes yet"
-    
+
+    opt_set = set(OPTIONS)
+
     ballots = []
-    latest_time = "Unknown"
+    first_choice_counts = {o: 0 for o in OPTIONS}
+    latest_time = all_votes[-1].timestamp  # simple + stable given id order
+
     for v in all_votes:
-        rank_list = v.ranks.split('||')
+        raw = (v.ranks or "")
+        rank_list = [c.strip() for c in raw.split("||") if c.strip()]
+        rank_list = [c for c in rank_list if c in opt_set]
+        if not rank_list:
+            continue
+
+        # count first-choice
+        first_choice_counts[rank_list[0]] += 1
+
         ballots.append(Ballot(ranked_candidates=[Candidate(c) for c in rank_list]))
-        latest_time = v.timestamp
-    
+        latest_time = v.timestamp or latest_time
+
     candidates = [Candidate(o) for o in OPTIONS]
-    # Changed to Instant Runoff for naming (Standard 1-winner election)
     election = pyrankvote.instant_runoff_voting(candidates, ballots)
-    winners = election.get_winners()
-    
-    result_html = '<div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">'
-    if winners:
-        for i, winner in enumerate(winners):
-            style = "background: #fff9e6; border: 2px solid #ffcc00;" if i == 0 else "background: white; border: 1px solid #e1dfdd;"
-            label = "🏆 CURRENT LEADER" if i == 0 else f"Finalist #{i+1}"
-            result_html += f'<div class="winner-card" style="{style}"><span><strong>{label}:</strong> {winner}</span></div>'
+
+    # ---- Better "leader" UI: show ties + top 3 first-choice
+    sorted_fc = sorted(first_choice_counts.items(), key=lambda x: x[1], reverse=True)
+    top_votes = sorted_fc[0][1] if sorted_fc else 0
+    leaders = [name for name, cnt in sorted_fc if cnt == top_votes and cnt > 0][:5]
+    top3 = [(name, cnt) for name, cnt in sorted_fc[:3] if cnt > 0]
+
+    result_html = '<div style="display:flex; flex-direction:column; gap:10px; margin-top:15px;">'
+
+    if top_votes == 0:
+        result_html += '<div class="winner-card"><strong>No valid ballots yet.</strong></div>'
+    elif len(leaders) > 1:
+        # Tie for lead
+        result_html += (
+            f'<div class="winner-card" style="background:#fff9e6; border:2px solid #ffcc00;">'
+            f'<span><strong>🤝 TIE FOR LEAD ({top_votes} each):</strong> ' + " • ".join(leaders) + '</span>'
+            f'</div>'
+        )
+    else:
+        result_html += (
+            f'<div class="winner-card" style="background:#fff9e6; border:2px solid #ffcc00;">'
+            f'<span><strong>🏆 CURRENT LEADER:</strong> {leaders[0]} <span class="vote-count">{top_votes}</span></span>'
+            f'</div>'
+        )
+
+    if top3:
+        result_html += '<div style="font-size:0.9em; color:#666; margin-top:4px;">First-choice top:</div>'
+        for name, cnt in top3:
+            result_html += f'<div class="winner-card"><span>{name}</span><span class="vote-count">{cnt}</span></div>'
+
     result_html += '</div>'
-        
+
     return result_html, str(election), len(all_votes), latest_time
+
 
 @app.route('/')
 def index():
@@ -215,36 +248,93 @@ def reset_my_vote():
 
 @app.route('/results_admin_view')
 def results_admin_view():
-    all_votes = Vote.query.all()
-    if not all_votes: 
+    all_votes = Vote.query.order_by(Vote.id.asc()).all()
+    if not all_votes:
         return "<h1>The Vault is Empty</h1><p>No votes yet.</p><br><a href='/'>Back to Voting</a>"
-    
-    candidates = [Candidate(o) for o in OPTIONS]
-    ballots = [Ballot(ranked_candidates=[Candidate(c.strip()) for c in v.ranks.split('||')]) for v in all_votes]
-    election = pyrankvote.instant_runoff_voting(candidates, ballots)
-    
-    return f"""
-    <body style="font-family: sans-serif; padding: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+
+    opt_set = set(OPTIONS)
+
+    # ---- Build ballots + first-choice counts (human-friendly sanity check)
+    first_counts = {o: 0 for o in OPTIONS}
+    ballots = []
+
+    for v in all_votes:
+        raw = (v.ranks or "")
+        rank_list = [c.strip() for c in raw.split("||") if c.strip()]
+        rank_list = [c for c in rank_list if c in opt_set]  # ignore removed/unknown options
+        if not rank_list:
+            continue
+
+        first_counts[rank_list[0]] += 1
+        ballots.append(Ballot(ranked_candidates=[Candidate(c) for c in rank_list]))
+
+    # If votes exist but none are valid under current OPTIONS
+    if not ballots:
+        return f"""
+        <body style="font-family: system-ui, sans-serif; padding: 20px;">
             <h1>Ranked Choice Results (Admin)</h1>
-            <a href='/download_votes' style="background: #107c10; color: white; padding: 10px; text-decoration: none; border-radius: 4px;">📥 Download CSV</a>
+            <p>Total rows in Vote table: <b>{len(all_votes)}</b></p>
+            <p style="color:#d13438;"><b>No valid ballots.</b> Votes exist, but none match current OPTIONS.</p>
+            <p><a href="/">🏠 Back to Voting</a></p>
+        </body>
+        """
+
+    candidates = [Candidate(o) for o in OPTIONS]
+    election = pyrankvote.instant_runoff_voting(candidates, ballots)
+
+    # ---- Leader / tie display
+    sorted_first = sorted(first_counts.items(), key=lambda x: x[1], reverse=True)
+    top_votes = sorted_first[0][1] if sorted_first else 0
+    leaders = [name for name, cnt in sorted_first if cnt == top_votes and cnt > 0]
+    top5 = [(name, cnt) for name, cnt in sorted_first[:5] if cnt > 0]
+
+    if top_votes == 0:
+        leader_html = "<p><b>No first-choice votes counted.</b></p>"
+    elif len(leaders) > 1:
+        leader_html = f"<p><b>🤝 Tie for lead ({top_votes} each):</b> " + " • ".join(leaders) + "</p>"
+    else:
+        leader_html = f"<p><b>🏆 Current first-choice leader:</b> {leaders[0]} ({top_votes})</p>"
+
+    top5_rows = ""
+    for name, cnt in top5:
+        top5_rows += f"<tr><td style='padding:6px 10px;border-bottom:1px solid #eee;'>{name}</td><td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;'><b>{cnt}</b></td></tr>"
+
+    return f"""
+    <body style="font-family: system-ui, sans-serif; padding: 20px; max-width: 980px; margin: 0 auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <h1 style="margin:0;">Ranked Choice Results (Admin)</h1>
+            <a href='/download_votes' style="background:#107c10;color:white;padding:10px 12px;text-decoration:none;border-radius:6px;">📥 Download CSV</a>
         </div>
-        
-        <p>Total Ballots: <b>{len(all_votes)}</b></p>
-        <pre style="background: #323130; color: #00ff00; padding: 15px; border-radius: 5px; overflow-x: auto;">{election}</pre>
-        
-        <hr style="margin: 30px 0;">
-        <div style="display: flex; gap: 20px; align-items: center;">
+
+        <p>Total Ballots Stored: <b>{len(all_votes)}</b> &nbsp;•&nbsp; Valid Ballots Counted: <b>{len(ballots)}</b></p>
+
+        <div style="background:#f7f7f9;border:1px solid #e1dfdd;border-radius:10px;padding:12px 14px;margin:14px 0;">
+            {leader_html}
+            <div style="font-size:13px;color:#666;margin-top:8px;"><b>Top first-choice (sanity check):</b></div>
+            <table style="width:100%;border-collapse:collapse;margin-top:6px;">
+                {top5_rows}
+            </table>
+        </div>
+
+        <div style="font-size:13px;color:#666;margin:14px 0 6px;">
+            <b>Instant Runoff detail:</b>
+        </div>
+        <pre style="background:#323130;color:#00ff00;padding:15px;border-radius:8px;overflow-x:auto;">{election}</pre>
+
+        <hr style="margin: 24px 0;">
+
+        <div style="display:flex; gap: 18px; align-items:center; flex-wrap:wrap;">
             <a href='/'>🏠 Back to Voting</a>
-            <a href='/admin_test_data' style="color: #464EB8;">🧪 Add 3 Test Votes</a>
-            <a href='/wipe_the_vault_2026_CONFIRM' 
-               onclick="return confirm('WARNING: This will permanently delete EVERY vote. Are you sure?')" 
-               style="color: #d13438; font-size: 0.8em; border: 1px solid #d13438; padding: 5px; border-radius: 4px; text-decoration: none;">
-               ⚠️ Wipe Database (Monday Morning Only)
+            <a href='/admin_test_data' style="color:#464EB8;">🧪 Add 3 Test Votes</a>
+            <a href='/wipe_the_vault_2026_CONFIRM'
+               onclick="return confirm('WARNING: This will permanently delete EVERY vote. Are you sure?')"
+               style="color:#d13438;font-size:0.9em;border:1px solid #d13438;padding:8px 10px;border-radius:6px;text-decoration:none;">
+               ⚠️ Wipe Database
             </a>
         </div>
     </body>
     """
+
 @app.route('/results_2026_secret')
 def secret_results_view():
     all_votes = Vote.query.order_by(Vote.id.asc()).all()
