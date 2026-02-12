@@ -10,6 +10,12 @@ from pyrankvote import Candidate, Ballot
 
 app = Flask(__name__)
 
+print("BOOT FILE:", __file__)
+
+@app.route("/__whoami")
+def __whoami():
+    return f"<pre>BOOT FILE: {__file__}</pre>"
+
 # --- DATABASE CONFIG ---
 uri = os.environ.get('DATABASE_URL', 'sqlite:///local.db')
 if uri and uri.startswith("postgres://"):
@@ -327,6 +333,8 @@ def _routes():
         lines.append(f"{r.rule:35s}  [{methods}]  -> {r.endpoint}")
     return "<pre>" + "\n".join(lines) + "</pre>"
 
+print("BOOT: running file =", __file__)
+print("BOOT: has _routes =", True)
 
 # THIS MUST BE THE VERY LAST LINE OF THE FILE
 if __name__ == '__main__':
