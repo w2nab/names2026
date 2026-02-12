@@ -59,6 +59,7 @@ HTML_TEMPLATE = """
 <html>
 <head>
     <title>Unit Naming Vote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, sans-serif; padding: 0; margin: 0; background: #f3f2f1; color: #323130; }
